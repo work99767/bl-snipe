@@ -123,7 +123,7 @@ jobs:
           if "Account Error" in res:
               nxt = nxt + datetime.timedelta(days=1)
           def sub(m):
-              return m.group(1) + f" {nxt.day} {nxt.month} *"
+              return m.group(1) + f" {nxt.day} {nxt.month} *'"
           yml2 = re.sub(r"(cron: '(?:30 14|50 14|20 16)) \d+ \d+ \*'", sub, yml)
           yml2 = re.sub(r"schedule == '20 16 \d+ \d+ \*'", f"schedule == '20 16 {nxt.day} {nxt.month} *'", yml2)
           if yml2 != yml:
