@@ -103,31 +103,29 @@ jobs:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           python3 - <<'PY'
-          import base64, json, os, urllib.request, datetime
+          import base64, json, os, re, urllib.request, urllib.error, datetime
           TOKEN = os.environ['GH_PAT']
           def api(path, data=None, method="GET"):
               req = urllib.request.Request(f"https://api.github.com{path}",
                   data=json.dumps(data).encode() if data is not None else None, method=method,
                   headers={"Authorization": f"Bearer {TOKEN}", "User-Agent": "zcode", "Accept": "application/vnd.github+json"})
-              import urllib.error
               try:
                   with urllib.request.urlopen(req) as r:
-                      b = r.read()
-                      return json.loads(b) if b else {}
+                      b = r.read(); return json.loads(b) if b else {}
               except urllib.error.HTTPError as e:
-                  print("API error", e.code, e.read()[:200]); raise
+                  if e.code == 404: return None
+                  raise
           path = "/repos/work99767/bl-snipe/contents/.github/workflows/snipe.yml"
           cur = api(path)
           yml = base64.b64decode(cur["content"]).decode()
-          nxt = datetime.date.today() + datetime.timedelta(days=1)
-          # Account Error cooldown: push a day further to be safe
           res = open("result.txt").read()
+          nxt = datetime.date.today() + datetime.timedelta(days=1)
           if "Account Error" in res:
               nxt = nxt + datetime.timedelta(days=1)
-          old_d, old_m = "12 9", "12 9"
-          new = f"{nxt.day} {nxt.month}"
-          yml2 = yml.replace("30 14 12 9 *", f"30 14 {new} *").replace("50 14 12 9 *", f"50 14 {new} *").replace("20 16 12 9 *", f"20 16 {new} *")
-          yml2 = yml2.replace("schedule == '20 16 12 9 *'", f"schedule == '20 16 {new} *'")
+          def sub(m):
+              return m.group(1) + f" {nxt.day} {nxt.month} *"
+          yml2 = re.sub(r"(cron: '(?:30 14|50 14|20 16)) \d+ \d+ \*'", sub, yml)
+          yml2 = re.sub(r"schedule == '20 16 \d+ \d+ \*'", f"schedule == '20 16 {nxt.day} {nxt.month} *'", yml2)
           if yml2 != yml:
               api(path, {"message": f"reschedule to {nxt.isoformat()}", "content": base64.b64encode(yml2.encode()).decode(), "sha": cur["sha"]}, "PUT")
               print("rescheduled to", nxt.isoformat())
