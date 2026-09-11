@@ -61,28 +61,42 @@ jobs:
       - name: Check state and write result.txt
         id: st
         run: |
-            python3 - <<'PY'
-            import sys, json, requests, datetime
-            sys.path.insert(0, '/opt/hostedtoolcache/Python/3.12.*/lib/python3.12/site-packages')
-            PY
-            SITE=$(python3 -c 'import micommunity,os;print(os.path.dirname(os.path.dirname(micommunity.__file__)))')
-            PYTHONPATH=$SITE python3 - <<'PY' > result.txt
-            import json, requests, datetime
-            from micommunity import STATE_URL, get_headers, state
-            h = get_headers(silent=True)
-            r = requests.Session().get(STATE_URL, headers=h, timeout=15)
-            res = state(r)
-            print("checked_at_utc:", datetime.datetime.utcnow().isoformat())
-            print("code:", res.get("code"))
-            print("message:", res.get("message"))
-            PY
-            cat result.txt
-            if grep -q "code: 1" result.txt; then echo "won=true" >> $GITHUB_OUTPUT; else echo "won=false" >> $GITHUB_OUTPUT; fi
+          SITE=$(python3 -c 'import micommunity,os;print(os.path.dirname(os.path.dirname(micommunity.__file__)))')
+          PYTHONPATH=$SITE python3 - <<'PY' > result.txt
+          import json, requests, datetime
+          from micommunity import STATE_URL, get_headers, state
+          h = get_headers(silent=True)
+          r = requests.Session().get(STATE_URL, headers=h, timeout=15)
+          res = state(r)
+          print("checked_at_utc:", datetime.datetime.now(datetime.timezone.utc).isoformat())
+          print("code:", res.get("code"))
+          print("message:", res.get("message"))
+          PY
+          cat result.txt
+          if grep -q "code: 1" result.txt; then echo "won=true" >> $GITHUB_OUTPUT; else echo "won=false" >> $GITHUB_OUTPUT; fi
       - name: Commit result.txt
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          curl -s -X PUT -H "Authorization: Bearer $GH_PAT" -H "Accept: application/vnd.github+json"             "https://api.github.com/repos/work99767/bl-snipe/contents/result.txt"             -d "{"message":"result update","content":"$(base64 -w0 result.txt)"}"
+          python3 - <<'PY'
+          import base64, json, os, urllib.request, urllib.error
+          TOKEN = os.environ['GH_PAT']
+          def api(path, data=None, method="GET"):
+              req = urllib.request.Request(f"https://api.github.com{path}",
+                  data=json.dumps(data).encode() if data is not None else None, method=method,
+                  headers={"Authorization": f"Bearer {TOKEN}", "User-Agent": "zcode", "Accept": "application/vnd.github+json"})
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      b = r.read(); return json.loads(b) if b else {}
+              except urllib.error.HTTPError as e:
+                  if e.code == 404: return None
+                  raise
+          body = {"message": "result update", "content": base64.b64encode(open("result.txt","rb").read()).decode()}
+          ex = api("/repos/work99767/bl-snipe/contents/result.txt")
+          if ex: body["sha"] = ex["sha"]
+          api("/repos/work99767/bl-snipe/contents/result.txt", body, "PUT")
+          print("result.txt committed")
+          PY
       - name: Reschedule next night if not won
         if: steps.st.outputs.won == 'false'
         env:
