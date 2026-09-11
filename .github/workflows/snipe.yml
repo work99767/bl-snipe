@@ -1,0 +1,28 @@
+name: snipe
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 15 12 9 *'
+jobs:
+  snipe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install miapply
+      - name: Patch miapply with NTP fallback
+        run: |
+          SITE=$(python3 -c 'import miapply,os;print(os.path.dirname(miapply.__file__))')
+          cp miapply_patched.py "$SITE/cli.py"
+      - name: Write session
+        env:
+          SESSION_JSON: ${{ secrets.SESSION_JSON }}
+        run: |
+          mkdir -p ~/.migatesession/18n_bbs_global
+          printf '%s' "$SESSION_JSON" > ~/.migatesession/18n_bbs_global/session.json
+          python3 -c 'import json;json.load(open("/home/runner/.migatesession/18n_bbs_global/session.json"));print("session OK")'
+      - name: Fire at 00:00 GMT+8 (delay 1000ms)
+        run: printf '\n1000\n' | python3 -u $(command -v miapply)
