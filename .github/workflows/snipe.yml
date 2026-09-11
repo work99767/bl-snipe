@@ -3,6 +3,11 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '30 14 12 9 *'
+    - cron: '50 14 12 9 *'
+    - cron: '20 16 12 9 *'
+concurrency:
+  group: snipe-window
+  cancel-in-progress: false
 jobs:
   snipe:
     runs-on: ubuntu-latest
@@ -12,12 +17,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Too late guard (skip if window passed)
+        id: guard
+        run: |
+          BJ=$(TZ=Asia/Shanghai date +%H%M)
+          echo "beijing=$BJ"
+          if [ "$BJ" -ge 2355 ]; then echo "toolate=true" >> $GITHUB_OUTPUT; else echo "toolate=false" >> $GITHUB_OUTPUT; fi
       - run: pip install miapply
+        if: steps.guard.outputs.toolate == 'false'
       - name: Patch miapply with NTP fallback
+        if: steps.guard.outputs.toolate == 'false'
         run: |
           SITE=$(python3 -c 'import miapply,os;print(os.path.dirname(miapply.__file__))')
           cp miapply_patched.py "$SITE/cli.py"
       - name: Write session
+        if: steps.guard.outputs.toolate == 'false'
         env:
           SESSION_JSON: ${{ secrets.SESSION_JSON }}
         run: |
@@ -25,4 +39,84 @@ jobs:
           printf '%s' "$SESSION_JSON" > ~/.migatesession/18n_bbs_global/session.json
           python3 -c 'import json;json.load(open("/home/runner/.migatesession/18n_bbs_global/session.json"));print("session OK")'
       - name: Fire at 00:00 GMT+8 (delay 1000ms)
+        if: steps.guard.outputs.toolate == 'false'
         run: printf '\n1000\n' | python3 -u $(command -v miapply)
+
+  report:
+    if: github.event_name == 'schedule' && github.event.schedule == '20 16 12 9 *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install miapply
+      - name: Write session
+        env:
+          SESSION_JSON: ${{ secrets.SESSION_JSON }}
+        run: |
+          mkdir -p ~/.migatesession/18n_bbs_global
+          printf '%s' "$SESSION_JSON" > ~/.migatesession/18n_bbs_global/session.json
+      - name: Check state and write result.txt
+        id: st
+        run: |
+            python3 - <<'PY'
+            import sys, json, requests, datetime
+            sys.path.insert(0, '/opt/hostedtoolcache/Python/3.12.*/lib/python3.12/site-packages')
+            PY
+            SITE=$(python3 -c 'import micommunity,os;print(os.path.dirname(os.path.dirname(micommunity.__file__)))')
+            PYTHONPATH=$SITE python3 - <<'PY' > result.txt
+            import json, requests, datetime
+            from micommunity import STATE_URL, get_headers, state
+            h = get_headers(silent=True)
+            r = requests.Session().get(STATE_URL, headers=h, timeout=15)
+            res = state(r)
+            print("checked_at_utc:", datetime.datetime.utcnow().isoformat())
+            print("code:", res.get("code"))
+            print("message:", res.get("message"))
+            PY
+            cat result.txt
+            if grep -q "code: 1" result.txt; then echo "won=true" >> $GITHUB_OUTPUT; else echo "won=false" >> $GITHUB_OUTPUT; fi
+      - name: Commit result.txt
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          curl -s -X PUT -H "Authorization: Bearer $GH_PAT" -H "Accept: application/vnd.github+json"             "https://api.github.com/repos/work99767/bl-snipe/contents/result.txt"             -d "{"message":"result update","content":"$(base64 -w0 result.txt)"}"
+      - name: Reschedule next night if not won
+        if: steps.st.outputs.won == 'false'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, urllib.request, datetime
+          TOKEN = os.environ['GH_PAT']
+          def api(path, data=None, method="GET"):
+              req = urllib.request.Request(f"https://api.github.com{path}",
+                  data=json.dumps(data).encode() if data is not None else None, method=method,
+                  headers={"Authorization": f"Bearer {TOKEN}", "User-Agent": "zcode", "Accept": "application/vnd.github+json"})
+              import urllib.error
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      b = r.read()
+                      return json.loads(b) if b else {}
+              except urllib.error.HTTPError as e:
+                  print("API error", e.code, e.read()[:200]); raise
+          path = "/repos/work99767/bl-snipe/contents/.github/workflows/snipe.yml"
+          cur = api(path)
+          yml = base64.b64decode(cur["content"]).decode()
+          nxt = datetime.date.today() + datetime.timedelta(days=1)
+          # Account Error cooldown: push a day further to be safe
+          res = open("result.txt").read()
+          if "Account Error" in res:
+              nxt = nxt + datetime.timedelta(days=1)
+          old_d, old_m = "12 9", "12 9"
+          new = f"{nxt.day} {nxt.month}"
+          yml2 = yml.replace("30 14 12 9 *", f"30 14 {new} *").replace("50 14 12 9 *", f"50 14 {new} *").replace("20 16 12 9 *", f"20 16 {new} *")
+          yml2 = yml2.replace("schedule == '20 16 12 9 *'", f"schedule == '20 16 {new} *'")
+          if yml2 != yml:
+              api(path, {"message": f"reschedule to {nxt.isoformat()}", "content": base64.b64encode(yml2.encode()).decode(), "sha": cur["sha"]}, "PUT")
+              print("rescheduled to", nxt.isoformat())
+          else:
+              print("no changes needed")
+          PY
