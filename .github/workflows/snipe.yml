@@ -2,14 +2,15 @@ name: snipe
 on:
   workflow_dispatch:
   schedule:
-    - cron: '30 14 12 9 *'
-    - cron: '50 14 12 9 *'
-    - cron: '20 16 12 9 *'
+    - cron: '30 14 * * *'
+    - cron: '50 14 * * *'
+    - cron: '50 16 * * *'
 concurrency:
   group: snipe-window
   cancel-in-progress: false
 jobs:
   snipe:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule != '50 16 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 100
     steps:
@@ -38,7 +39,7 @@ jobs:
         run: python3 -u sniper.py
 
   report:
-    if: github.event_name == 'schedule' && github.event.schedule == '20 16 12 9 *'
+    if: github.event_name == 'schedule' && github.event.schedule == '50 16 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -92,38 +93,10 @@ jobs:
           api("/repos/work99767/bl-snipe/contents/result.txt", body, "PUT")
           print("result.txt committed")
           PY
-      - name: Reschedule next night if not won
-        if: steps.st.outputs.won == 'false'
+      - name: Disable workflow on win
+        if: steps.st.outputs.won == 'true'
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          python3 - <<'PY'
-          import base64, json, os, re, urllib.request, urllib.error, datetime
-          TOKEN = os.environ['GH_PAT']
-          def api(path, data=None, method="GET"):
-              req = urllib.request.Request(f"https://api.github.com{path}",
-                  data=json.dumps(data).encode() if data is not None else None, method=method,
-                  headers={"Authorization": f"Bearer {TOKEN}", "User-Agent": "zcode", "Accept": "application/vnd.github+json"})
-              try:
-                  with urllib.request.urlopen(req) as r:
-                      b = r.read(); return json.loads(b) if b else {}
-              except urllib.error.HTTPError as e:
-                  if e.code == 404: return None
-                  raise
-          path = "/repos/work99767/bl-snipe/contents/.github/workflows/snipe.yml"
-          cur = api(path)
-          yml = base64.b64decode(cur["content"]).decode()
-          res = open("result.txt").read()
-          nxt = datetime.date.today() + datetime.timedelta(days=1)
-          if "Account Error" in res:
-              nxt = nxt + datetime.timedelta(days=1)
-          def sub(m):
-              return m.group(1) + f" {nxt.day} {nxt.month} *'"
-          yml2 = re.sub(r"(cron: '(?:30 14|50 14|20 16)) \d+ \d+ \*'", sub, yml)
-          yml2 = re.sub(r"schedule == '20 16 \d+ \d+ \*'", f"schedule == '20 16 {nxt.day} {nxt.month} *'", yml2)
-          if yml2 != yml:
-              api(path, {"message": f"reschedule to {nxt.isoformat()}", "content": base64.b64encode(yml2.encode()).decode(), "sha": cur["sha"]}, "PUT")
-              print("rescheduled to", nxt.isoformat())
-          else:
-              print("no changes needed")
-          PY
+          curl -s -X PUT -H "Authorization: Bearer $GH_PAT" -H "Accept: application/vnd.github+json"             "https://api.github.com/repos/work99767/bl-snipe/actions/workflows/snipe.yml/disable"
+          echo "workflow disabled (won)"
