@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: '40 14 * * *'
     - cron: '55 14 * * *'
+    - cron: '15 15 * * *'
     - cron: '55 16 * * *'
 concurrency:
   group: snipe2-window
@@ -70,6 +71,7 @@ jobs:
           PY
           cat result2.txt
           if grep -q "code: 1" result2.txt; then echo "won=true" >> $GITHUB_OUTPUT; else echo "won=false" >> $GITHUB_OUTPUT; fi
+          if grep -q "code: -1" result2.txt; then echo "STATE CALL FAILED (session dead?)"; exit 1; fi
       - name: Commit result2.txt
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
