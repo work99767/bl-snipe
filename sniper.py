@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from micommunity import get_headers, STATE_URL, APPLY_URL, state
 
 DRY = os.environ.get("DRY") == "1"
+TAP_OFFSETS = [float(x)/1000.0 for x in os.environ.get("TAP_OFFSETS", "-1200,-150,40").split(",")]
 TEST_TARGET_S = float(os.environ["TEST_TARGET_S"]) if os.environ.get("TEST_TARGET_S") else None
 WARM_AT = float(os.environ.get("WARM_WINDOW", "15"))
 ARRIVAL = float(os.environ.get("ARRIVAL_MS", "40")) / 1000.0
@@ -157,16 +158,20 @@ warm_rtt = min(rtts)
 oneway = warm_rtt / 2.0
 print(f"[5/6] warm_rtt={warm_rtt*1000:.0f}ms oneway~{oneway*1000:.0f}ms", flush=True)
 
-send_off = ARRIVAL - oneway
-if send_off < -0.30:
-    send_off = -0.30
-print(f"      send at {send_off*1000:+.0f}ms rel. server-midnight", flush=True)
+def clamp(v, lo=-1.5, hi=0.5):
+    return max(lo, min(hi, v))
+send_off = clamp(TAP_OFFSETS[0] - oneway if TAP_OFFSETS[0] < 0 else TAP_OFFSETS[0] - oneway)
+# For queue strategy: offsets are SEND times rel. midnight (arrival = offset + oneway)
+offs = [clamp(o - oneway) if o < 0 else clamp(o - oneway) for o in TAP_OFFSETS]
+send_off = offs[0]
+print(f"      tap sends at {[f'{o*1000:+.0f}' for o in offs]}ms rel. server-midnight (oneway {oneway*1000:.0f}ms)", flush=True)
 
 # keep-alive touches every 3s until T-1.5s; second socket prewarmed as failover
 s2 = new_session()
 s2.get(STATE_URL, headers=headers, timeout=5)
+FIRST_OFF = min(offs)
 while True:
-    d = (FIRE_TARGET + send_off) - true_now()
+    d = (FIRE_TARGET + FIRST_OFF) - true_now()
     if d <= 1.5:
         break
     time.sleep(min(d - 1.5, 3.0))
@@ -191,14 +196,19 @@ while (FIRE_TARGET + send_off) - true_now() > 0:
     pass
 
 print("[6/6] FIRE", flush=True)
-r1 = tap(False, s)
-if "ERR" in r1:
-    r1 += " | failover-> " + tap(False, s2)
-print("TAP1", r1, flush=True)
-time.sleep(0.06)
-print("TAP2", tap(True, s), flush=True)
-time.sleep(0.06)
-print("TAP3", tap(True, s2), flush=True)
+import time as _t
+def fire_at(off, is_retry, sess, label):
+    # wait for this tap's send time
+    while (FIRE_TARGET + off) - true_now() > 0:
+        pass
+    res = tap(is_retry, sess)
+    if "ERR" in res and sess is s:
+        res += " | failover-> " + tap(is_retry, s2)
+    print(label, res, flush=True)
+
+labels = ["TAP1", "TAP2", "TAP3", "TAP4"]
+for i, off in enumerate(offs[:4]):
+    fire_at(off, i > 0, s if i % 2 == 0 else s2, labels[i])
 
 if TEST_TARGET_S:
     print("DONE (test mode)", flush=True)
