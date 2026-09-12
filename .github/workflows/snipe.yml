@@ -23,13 +23,8 @@ jobs:
           BJ=$(TZ=Asia/Shanghai date +%H%M)
           echo "beijing=$BJ"
           if [ "$BJ" -ge 2355 ]; then echo "toolate=true" >> $GITHUB_OUTPUT; else echo "toolate=false" >> $GITHUB_OUTPUT; fi
-      - run: pip install miapply
+      - run: pip install miapply ntplib
         if: steps.guard.outputs.toolate == 'false'
-      - name: Patch miapply with NTP fallback
-        if: steps.guard.outputs.toolate == 'false'
-        run: |
-          SITE=$(python3 -c 'import miapply,os;print(os.path.dirname(miapply.__file__))')
-          cp miapply_patched.py "$SITE/cli.py"
       - name: Write session
         if: steps.guard.outputs.toolate == 'false'
         env:
@@ -38,9 +33,9 @@ jobs:
           mkdir -p ~/.migatesession/18n_bbs_global
           printf '%s' "$SESSION_JSON" > ~/.migatesession/18n_bbs_global/session.json
           python3 -c 'import json;json.load(open("/home/runner/.migatesession/18n_bbs_global/session.json"));print("session OK")'
-      - name: Fire at 00:00 GMT+8 (delay 1000ms)
+      - name: Fire precision sniper (RTT-calibrated triple tap)
         if: steps.guard.outputs.toolate == 'false'
-        run: printf '\n1000\n' | python3 -u $(command -v miapply)
+        run: python3 -u sniper.py
 
   report:
     if: github.event_name == 'schedule' && github.event.schedule == '20 16 12 9 *'
